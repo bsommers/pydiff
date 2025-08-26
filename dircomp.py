@@ -396,9 +396,15 @@ class CursesUI:
         self.stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
         
         # Draw detailed column headers with clear sections
-        # Calculate proper column widths - use fixed widths for consistency
-        left_col_width = 25 if self.width >= 80 else self.width // 3 - 1
-        status_col_width = 10
+        # Calculate proper column widths - allocate more space for filenames
+        status_col_width = 12
+        # Give more space to filename columns, especially for wider terminals
+        if self.width >= 120:
+            left_col_width = max(40, self.width // 3)
+        elif self.width >= 80:
+            left_col_width = max(35, self.width // 3)
+        else:
+            left_col_width = max(20, self.width // 3 - 1)
         right_col_width = self.width - left_col_width - status_col_width - 4  # -4 for the 4 border characters
         
         headers_line1 = "┌" + "─" * left_col_width + "┬" + "─" * status_col_width + "┬" + "─" * right_col_width + "┐"
@@ -430,8 +436,14 @@ class CursesUI:
             return
         
         # Calculate column widths (same as in _draw_screen)
-        left_col_width = 25 if self.width >= 80 else self.width // 3 - 1
-        status_col_width = 10
+        status_col_width = 12
+        # Give more space to filename columns, especially for wider terminals
+        if self.width >= 120:
+            left_col_width = max(40, self.width // 3)
+        elif self.width >= 80:
+            left_col_width = max(35, self.width // 3)
+        else:
+            left_col_width = max(20, self.width // 3 - 1)
         right_col_width = self.width - left_col_width - status_col_width - 4  # -4 for the 4 border characters
         
         # Adjust scroll offset
@@ -506,8 +518,30 @@ class CursesUI:
             
             # Create the complete line with filename and status info
             filename = result.relative_path
-            if len(filename) > left_width - 18:  # Reserve space for size/time info
-                filename = "..." + filename[-(left_width - 21):]
+            filename_space = left_width - 18  # Reserve space for size/time info
+            
+            if len(filename) > filename_space:
+                # Smart truncation: try to show the most relevant part
+                if "/" in filename:
+                    # If it's a path, try to show the filename and as much path as possible
+                    parts = filename.split("/")
+                    base_filename = parts[-1]
+                    if len(base_filename) + 4 <= filename_space:  # +4 for ".../"
+                        # Show as much directory path as possible with the filename
+                        remaining_space = filename_space - len(base_filename) - 4
+                        path_part = "/".join(parts[:-1])
+                        if len(path_part) > remaining_space:
+                            path_part = path_part[-remaining_space:]
+                            # Try to break at a directory boundary if possible
+                            if "/" in path_part[1:]:
+                                path_part = path_part[path_part.find("/", 1):]
+                        filename = f".../{path_part}/{base_filename}"
+                    else:
+                        # Just truncate from the beginning
+                        filename = "..." + filename[-(filename_space - 3):]
+                else:
+                    # Simple truncation for non-path filenames
+                    filename = "..." + filename[-(filename_space - 3):]
             
             left_part = f"{filename:<{left_width-18}}{left_info:>17}"
             # Ensure exact column width - pad or truncate as needed
