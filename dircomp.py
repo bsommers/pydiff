@@ -395,12 +395,26 @@ class CursesUI:
         self.stdscr.addstr(0, 0, header.ljust(self.width)[:self.width])
         self.stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
         
-        # Draw column headers
-        left_header = f"{'LEFT':<{self.width//3}}"
-        middle_header = f"{'STATUS':<8}"
-        right_header = f"RIGHT"
-        headers = left_header + middle_header + right_header
-        self.stdscr.addstr(1, 0, headers[:self.width])
+        # Draw detailed column headers with clear sections
+        # Calculate proper column widths - use fixed widths for consistency
+        left_col_width = 25 if self.width >= 80 else self.width // 3 - 1
+        status_col_width = 10
+        right_col_width = self.width - left_col_width - status_col_width - 4  # -4 for the 4 border characters
+        
+        headers_line1 = "┌" + "─" * left_col_width + "┬" + "─" * status_col_width + "┬" + "─" * right_col_width + "┐"
+        headers_line2 = f"│{'LEFT DIRECTORY':<{left_col_width}}│{'STATUS':<{status_col_width}}│{'RIGHT DIRECTORY':<{right_col_width}}│"
+        headers_line3 = "├" + "─" * left_col_width + "┼" + "─" * status_col_width + "┼" + "─" * right_col_width + "┤"
+        
+        try:
+            self.stdscr.addstr(1, 0, headers_line1[:self.width])
+            self.stdscr.addstr(2, 0, headers_line2[:self.width]) 
+            self.stdscr.addstr(3, 0, headers_line3[:self.width])
+        except curses.error:
+            # Fallback to simple headers if box drawing fails
+            self.stdscr.addstr(1, 0, "-" * self.width)
+            headers = f"{'LEFT':<{self.width//3}}{'STATUS':<10}{'RIGHT'}"
+            self.stdscr.addstr(2, 0, headers[:self.width])
+            self.stdscr.addstr(3, 0, "-" * self.width)
         
         # Draw file list
         self._draw_file_list()
@@ -412,19 +426,22 @@ class CursesUI:
     def _draw_file_list(self):
         """Draw the file comparison list."""
         if not self.comparer.results:
-            self.stdscr.addstr(3, 2, "No files found or directories don't exist")
+            self.stdscr.addstr(5, 2, "No files found or directories don't exist")
             return
+        
+        # Calculate column widths (same as in _draw_screen)
+        left_col_width = 25 if self.width >= 80 else self.width // 3 - 1
+        status_col_width = 10
+        right_col_width = self.width - left_col_width - status_col_width - 4  # -4 for the 4 border characters
         
         # Adjust scroll offset
         if self.comparer.selected_index < self.scroll_offset:
             self.scroll_offset = self.comparer.selected_index
-        elif self.comparer.selected_index >= self.scroll_offset + self.list_height // 2:
-            self.scroll_offset = max(0, self.comparer.selected_index - self.list_height // 2 + 1)
+        elif self.comparer.selected_index >= self.scroll_offset + self.list_height:
+            self.scroll_offset = max(0, self.comparer.selected_index - self.list_height + 1)
         
-        # Calculate visible items (each file takes 2 rows: filename and info)
-        visible_items = self.list_height // 2
-        if visible_items == 0:
-            visible_items = 1
+        # Calculate visible items (each file takes 1 row now)
+        visible_items = self.list_height
         
         for i in range(visible_items):
             result_index = self.scroll_offset + i
@@ -432,7 +449,10 @@ class CursesUI:
                 break
                 
             result = self.comparer.results[result_index]
-            base_y = 2 + (i * 2)  # Each item takes 2 rows
+            y_pos = 4 + i  # Start after headers
+            
+            if y_pos >= self.height - 2:
+                break
             
             # Determine colors based on status
             color_pair = 0
@@ -447,55 +467,79 @@ class CursesUI:
             
             # Highlight selected item
             attr = curses.color_pair(color_pair)
-            select_attr = attr
             if result_index == self.comparer.selected_index:
-                select_attr |= curses.A_REVERSE
+                attr |= curses.A_REVERSE
             
-            # Draw filename first (line 1 of the item)
-            if base_y < self.height - 3:
-                # Highlight the entire row if selected
-                self.stdscr.attron(select_attr)
-                filename = f"{result.relative_path}"
-                
-                # Add merge indicator if files can be merged
-                if result.can_merge:
-                    filename += " [M]"
-                
-                # Fill the whole line with spaces for proper highlight
-                self.stdscr.addstr(base_y, 0, " " * self.width)
-                # Add filename with padding
-                self.stdscr.addstr(base_y, 2, filename[:self.width-2])
-                self.stdscr.attroff(select_attr)
+            # Format file information for left side
+            left_info = "─ MISSING ─"
+            if result.left_file and result.left_file.exists:
+                size_str = self._format_size(result.left_file.size)
+                time_str = datetime.fromtimestamp(result.left_file.mtime).strftime("%m/%d %H:%M")
+                left_info = f"{size_str} {time_str}"
             
-            # Draw file details (line 2 of the item)
-            if base_y + 1 < self.height - 3:
-                # Format file information
-                left_info = "Missing"
-                if result.left_file and result.left_file.exists:
-                    size_str = self._format_size(result.left_file.size)
-                    time_str = datetime.fromtimestamp(result.left_file.mtime).strftime("%m/%d %H:%M")
-                    left_info = f"{size_str:>8} {time_str}"
-                
-                right_info = "Missing"
-                if result.right_file and result.right_file.exists:
-                    size_str = self._format_size(result.right_file.size)
-                    time_str = datetime.fromtimestamp(result.right_file.mtime).strftime("%m/%d %H:%M")
-                    right_info = f"{size_str:>8} {time_str}"
-                
-                # Create the display line
-                left_width = self.width // 3 - 1
-                middle_width = 8
-                right_width = self.width - left_width - middle_width - 2
-                
-                left_part = f"{left_info:<{left_width}}"[:left_width]
-                middle_part = f"{result.symbol:^{middle_width}}"
-                right_part = f"{right_info:<{right_width}}"[:right_width]
-                
-                line = left_part + " " + middle_part + " " + right_part
-                
-                self.stdscr.attron(attr)
-                self.stdscr.addstr(base_y + 1, 0, line[:self.width])
-                self.stdscr.attroff(attr)
+            # Format file information for right side  
+            right_info = "─ MISSING ─"
+            if result.right_file and result.right_file.exists:
+                size_str = self._format_size(result.right_file.size)
+                time_str = datetime.fromtimestamp(result.right_file.mtime).strftime("%m/%d %H:%M")
+                right_info = f"{size_str} {time_str}"
+            
+            # Get status description
+            status_descriptions = {
+                "ONLY_RIGHT": "<<<",
+                "ONLY_LEFT": ">>>", 
+                "DIFFERENT_SIZE": "SIZE",
+                "DIFFERENT_TIME": "TIME",
+                "DIFFERENT_CONTENT": "DIFF",
+                "IDENTICAL": "SAME"
+            }
+            status_text = status_descriptions.get(result.status, "????")
+            
+            # Add merge indicator
+            if result.can_merge:
+                status_text += "[M]"
+            
+            # Use the same column widths as headers
+            left_width = left_col_width
+            status_width = status_col_width 
+            right_width = right_col_width
+            
+            # Create the complete line with filename and status info
+            filename = result.relative_path
+            if len(filename) > left_width - 18:  # Reserve space for size/time info
+                filename = "..." + filename[-(left_width - 21):]
+            
+            left_part = f"{filename:<{left_width-18}}{left_info:>17}"
+            # Ensure exact column width - pad or truncate as needed
+            left_part = f"{left_part:<{left_width}}"[:left_width]
+            status_part = f"{status_text:^{status_width}}"
+            right_part = f"{right_info:<{right_width}}"[:right_width]
+            
+            # Construct the complete line with borders
+            try:
+                line = f"│{left_part}│{status_part}│{right_part}│"
+            except:
+                line = f"|{left_part}|{status_part}|{right_part}|"
+            
+            # Draw the line
+            self.stdscr.attron(attr)
+            try:
+                self.stdscr.addstr(y_pos, 0, line[:self.width])
+            except curses.error:
+                # Handle edge cases where line is too long
+                self.stdscr.addstr(y_pos, 0, line[:self.width-1])
+            self.stdscr.attroff(attr)
+        
+        # Draw bottom border if we have files
+        if self.comparer.results:
+            bottom_y = 4 + min(visible_items, len(self.comparer.results) - self.scroll_offset)
+            if bottom_y < self.height - 2:
+                try:
+                    bottom_line = "└" + "─" * left_col_width + "┴" + "─" * status_col_width + "┴" + "─" * right_col_width + "┘"
+                    self.stdscr.addstr(bottom_y, 0, bottom_line[:self.width])
+                except curses.error:
+                    # Fallback to simple bottom line
+                    self.stdscr.addstr(bottom_y, 0, "-" * self.width)
     
     def _draw_status(self):
         """Draw status bar."""
